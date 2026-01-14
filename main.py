@@ -40,6 +40,7 @@ class NeuroBot:
             self._log("AI Disabled: validation skipped", "WARN")
 
         self.loader = ExchangeLoader()
+        self.loader.set_alert_handler(self._log)
         self.smc = SMCAnalyzer()
         self.brain = NeuroBrain()
         self.manager = RiskManager(self.loader)

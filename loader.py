@@ -1,8 +1,9 @@
 import asyncio
 import json
+import logging
 import os
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 import ccxt
 import pandas as pd
@@ -18,14 +19,18 @@ class BinanceSyncWrapper:
     - Maka semua network call diproteksi oleh lock (serial), supaya stabil 24/7.
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, Any], on_error: Optional[Callable[[Exception], None]] = None):
         self.client = ccxt.binance(config)
         self._lock = asyncio.Lock()
         self._error_streak = 0
         self._backoff_until = 0.0
+        self._on_error = on_error
 
     def __getattr__(self, name: str):
         return getattr(self.client, name)
+
+    def set_on_error(self, handler: Optional[Callable[[Exception], None]]):
+        self._on_error = handler
 
     async def _call(self, fn, *args, **kwargs):
         async with self._lock:
@@ -38,7 +43,12 @@ class BinanceSyncWrapper:
                 pass
             try:
                 result = await asyncio.to_thread(fn, *args, **kwargs)
-            except Exception:
+            except Exception as exc:
+                if self._on_error:
+                    try:
+                        self._on_error(exc)
+                    except Exception:
+                        pass
                 try:
                     if getattr(Config, 'API_BACKOFF_ENABLED', True):
                         self._error_streak = min(int(self._error_streak) + 1, 10)
@@ -117,13 +127,71 @@ class BinanceSyncWrapper:
 
 
 class ExchangeLoader:
-    def __init__(self):
+    def __init__(self, alert_handler: Optional[Callable[[str, str], None]] = None):
         self.exchange: Optional[BinanceSyncWrapper] = None
         self._base_dir = os.path.dirname(os.path.abspath(__file__))
         self.paper_state_file = os.path.join(self._base_dir, "paper_wallet.json")
         self._markets_loaded = False
+        self._alert_handler = alert_handler
+        self._logger = logging.getLogger("neurobot.loader")
         self._init_exchange()
         self._init_paper_wallet()
+
+    def set_alert_handler(self, handler: Optional[Callable[[str, str], None]]):
+        self._alert_handler = handler
+        if self.exchange:
+            self.exchange.set_on_error(self._handle_exchange_error)
+
+    def _emit_alert(self, message: str, level: str = "WARN"):
+        if self._alert_handler:
+            try:
+                self._alert_handler(message, level)
+                return
+            except Exception:
+                pass
+        try:
+            if level == "ERROR":
+                self._logger.error(message)
+            elif level == "WARN":
+                self._logger.warning(message)
+            else:
+                self._logger.info(message)
+        except Exception:
+            pass
+
+    def _extract_http_status(self, exc: Exception) -> Optional[int]:
+        for attr in ("status", "http_status", "status_code"):
+            val = getattr(exc, attr, None)
+            if isinstance(val, int):
+                return val
+            try:
+                if val is not None:
+                    return int(val)
+            except Exception:
+                continue
+        msg = str(exc)
+        if "418" in msg:
+            return 418
+        if "429" in msg:
+            return 429
+        return None
+
+    def _handle_exchange_error(self, exc: Exception):
+        status = self._extract_http_status(exc)
+        is_rate = isinstance(exc, (ccxt.RateLimitExceeded, ccxt.DDoSProtection))
+        if status not in (418, 429) and not is_rate:
+            return
+        retry_after = None
+        try:
+            headers = getattr(self.exchange, "client", None)
+            headers = getattr(headers, "last_response_headers", None) if headers else None
+            if isinstance(headers, dict):
+                retry_after = headers.get("Retry-After") or headers.get("retry-after")
+        except Exception:
+            retry_after = None
+        extra = f" retry_after={retry_after}" if retry_after else ""
+        code = status if status is not None else "n/a"
+        self._emit_alert(f"Binance API rate limit/ban detected HTTP {code}: {exc}{extra}", "WARN")
 
     def _init_exchange(self):
         config = {
@@ -134,7 +202,7 @@ class ExchangeLoader:
                 'defaultType': 'future',
             },
         }
-        self.exchange = BinanceSyncWrapper(config)
+        self.exchange = BinanceSyncWrapper(config, on_error=self._handle_exchange_error)
 
     def _init_paper_wallet(self):
         if Config.TRADING_MODE != "PAPER":
