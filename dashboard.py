@@ -40,7 +40,7 @@ class Dashboard:
         # Header
         mode_color = Colors.GREEN if Config.TRADING_MODE == "LIVE" else Colors.CYAN
         header_width = 70
-        title = "NEUROBOT V1 Trade"
+        title = "NEUROBOT V2 Trade"
         border = "+" + ("-" * (header_width - 2)) + "+"
         print(f"{Colors.HEADER}{Colors.BOLD}{border}{Colors.RESET}")
         print(f"{Colors.HEADER}| {title:^{header_width - 4}} |{Colors.RESET}")
