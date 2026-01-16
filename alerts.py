@@ -31,7 +31,7 @@ class AlertManager:
             self._queue = asyncio.Queue()
             self._worker = asyncio.create_task(self._worker_loop())
 
-    def notify(self, level: str, message: str):
+    def notify(self, level: str, message: str, *, force: bool = False):
         if not self.enabled:
             return
         lvl = (level or "INFO").upper()
@@ -40,16 +40,26 @@ class AlertManager:
         if self._queue is None:
             return
         try:
-            self._queue.put_nowait((lvl, str(message)))
+            self._queue.put_nowait((lvl, str(message), bool(force)))
         except Exception:
             pass
 
     async def _worker_loop(self):
         while True:
-            level, message = await self._queue.get()
+            item = await self._queue.get()
             try:
+                force = False
+                if isinstance(item, tuple):
+                    if len(item) >= 3:
+                        level, message, force = item[0], item[1], bool(item[2])
+                    elif len(item) >= 2:
+                        level, message = item[0], item[1]
+                    else:
+                        continue
+                else:
+                    continue
                 now = time.time()
-                if self.min_interval > 0 and (now - self._last_sent) < self.min_interval:
+                if (not force) and self.min_interval > 0 and (now - self._last_sent) < self.min_interval:
                     continue
                 self._last_sent = now
                 await asyncio.to_thread(self._send, level, message)

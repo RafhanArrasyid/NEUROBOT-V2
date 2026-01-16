@@ -441,7 +441,7 @@ class SMCAnalyzer:
             return False
         return True
 
-    def analyze(self, df: pd.DataFrame):
+    def analyze(self, df: pd.DataFrame, *, require_touch: bool = True, enforce_filters: bool = True):
         """
         FUNGSI UTAMA yang dipanggil oleh bot.
         Menggabungkan Liquidity Sweep, MSS, FVG, dan OB sesuai ICT/SMC murni.
@@ -491,25 +491,36 @@ class SMCAnalyzer:
         zone_low, zone_high, zone_src = zone
 
         last_candle = df.iloc[-1]
-        if not self._price_touched_zone(last_candle, zone_low, zone_high):
+        if require_touch and not self._price_touched_zone(last_candle, zone_low, zone_high):
             return None, None, df
 
         entry_price = float(last_candle['close'])
+        entry_src = "CLOSE"
+        if not require_touch:
+            entry_price = (float(zone_low) + float(zone_high)) / 2.0
+            entry_src = "ZONE_MID"
+
         sl_tp = self._build_sl_tp(df, direction, entry_price, sweep, ob)
+        if not sl_tp and not require_touch:
+            entry_price = float(last_candle['close'])
+            entry_src = "CLOSE"
+            sl_tp = self._build_sl_tp(df, direction, entry_price, sweep, ob)
         if not sl_tp:
             return None, None, df
         sl_price, tp_price, r = sl_tp
 
-        if not self._passes_volume_filter(df):
-            return None, None, df
-        if not self._passes_session_filter(df):
-            return None, None, df
+        if enforce_filters:
+            if not self._passes_volume_filter(df):
+                return None, None, df
+            if not self._passes_session_filter(df):
+                return None, None, df
 
         last_sh = df['sh_price'].iloc[-2] if len(df) >= 2 else np.nan
         last_sl = df['sl_price'].iloc[-2] if len(df) >= 2 else np.nan
 
         setup_details = {
             "entry": float(entry_price),
+            "entry_src": entry_src,
             "sl": float(sl_price),
             "tp": float(tp_price),
             "r": float(r),

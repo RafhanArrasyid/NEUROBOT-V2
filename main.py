@@ -104,7 +104,7 @@ class NeuroBot:
         self._stdin_thread = t
         return True
 
-    def _log(self, msg: str, level: str = "INFO"):
+    def _log(self, msg: str, level: str = "INFO", force_alert: bool = False):
         self.dashboard.log(msg, level)
         try:
             if level == "ERROR": self.logger.error(msg)
@@ -113,7 +113,10 @@ class NeuroBot:
         except Exception: pass
         try:
             if self.alerts:
-                self.alerts.notify(level, msg)
+                if force_alert:
+                    self.alerts.notify(level, msg, force=True)
+                else:
+                    self.alerts.notify(level, msg)
         except Exception:
             pass
 
@@ -284,6 +287,13 @@ class NeuroBot:
                 'ts': float(time.time()),
             }
             self._save_intents()
+            side_disp = str(side).upper()
+            self._log(
+                f"LIMIT ORDER PLACED: {symbol} {side_disp} qty={float(qty):.6f} "
+                f"entry={float(entry):.6f} sl={float(sl):.6f} tp={float(tp):.6f} id={entry_order_id}",
+                "WARN",
+                force_alert=True,
+            )
         except Exception:
             return
 
@@ -1144,13 +1154,22 @@ class NeuroBot:
 
                 res = await self.executor.place_entry(symbol, side, qty, setup['entry'], setup['sl'], setup['tp'])
                 if res:
+                    side_disp = str(side).upper()
+                    msg_prefix = "LIMIT ORDER HIT" if Config.TRADING_MODE == "LIVE" else "ORDER SENT"
+                    filled_qty = float(res.get('qty') or qty)
+                    entry_price = float(res.get('entry_price') or setup['entry'])
+                    sl_price = float(res.get('sl') or setup['sl'])
+                    tp_price = float(res.get('tp') or setup['tp'])
                     base_msg = (
-                        f"ORDER SENT: {symbol} {side} {qty} "
-                        f"entry={setup['entry']:.6f} sl={setup['sl']:.6f} tp={setup['tp']:.6f}"
+                        f"{msg_prefix}: {symbol} {side_disp} qty={filled_qty:.6f} "
+                        f"entry={entry_price:.6f} sl={sl_price:.6f} tp={tp_price:.6f}"
                     )
+                    entry_id = res.get('entry_order_id')
+                    if entry_id:
+                        base_msg += f" id={entry_id}"
                     if ai_prob is not None:
                         base_msg += f" ai_prob={ai_prob:.2%}"
-                    self._log(base_msg, "WARN")
+                    self._log(base_msg, "WARN", force_alert=(Config.TRADING_MODE == "LIVE"))
                     if Config.TRADING_MODE == "LIVE":
                         key = self._position_key(symbol, side)
                         self._set_intent(key, res.get('entry_price', setup['entry']), res.get('sl', setup['sl']), res.get('tp', setup['tp']), res.get('qty', qty))
