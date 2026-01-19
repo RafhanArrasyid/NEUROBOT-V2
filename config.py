@@ -52,16 +52,17 @@ class Config:
     # 3. PAIRS & AI
     # ==========================================
     PAIRS = [
-        "XRP/USDT", "ADA/USDT", "DOGE/USDT", "MATIC/USDT", "FTM/USDT",
-        "SAND/USDT", "GALA/USDT", "VET/USDT", "GRT/USDT", "CHZ/USDT",
-        "ONE/USDT", "HBAR/USDT", "ALGO/USDT", "EOS/USDT", "MANA/USDT",
-        "ZIL/USDT", "KLAY/USDT", "BAT/USDT", "REN/USDT", "AUDIO/USDT"
+        "XRP/USDT", "DUSK/USDT", "DOGE/USDT", "ACE/USDT", "PIPPIN/USDT",
+        "SAND/USDT", "RIVER/USDT", "RESOLV/USDT", "DASH/USDT", "PLAY/USDT",
+        "RARE/USDT", "STO/USDT", "ALGO/USDT", "BERA/USDT", "FHE/USDT",
+        "BEAT/USDT", "FOGO/USDT", "BAT/USDT", "REN/USDT", "TURTLE/USDT"
+
     ]
     BTC_SYMBOL = "BTC/USDT"
     MAX_CORRELATION_BTC = 0.8
 
-    TF_MACRO = '4h'
-    TF_ENTRY = '15m'
+    TF_MACRO = '1h'
+    TF_ENTRY = '5m'
     TRAINING_LOOKBACK_CANDLES = 1000
     MCPT_ITERATIONS = 500
     AI_ENABLED = False
@@ -98,12 +99,7 @@ class Config:
     SMC_MIN_SL_PCT = 0.002
     SMC_MAX_SL_PCT = 0.05
     # Default killzones (UTC) - kosongkan jika ingin off.
-    SMC_ALLOWED_UTC_WINDOWS = [
-        ("01:00", "05:00"),  # Asia
-        ("07:00", "10:00"),  # London
-        ("13:30", "16:00"),  # New York AM
-        ("18:30", "21:00"),  # New York PM
-    ]
+    SMC_ALLOWED_UTC_WINDOWS = []
     # ==========================================
     # 5. SAFETY & OPS
     # ==========================================

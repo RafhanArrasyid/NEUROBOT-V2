@@ -145,14 +145,28 @@ class NeuroBot:
                 self._log("Pair validation skipped: markets unavailable.", "WARN")
                 self.pairs = pairs
                 return
-            invalid = [p for p in pairs if p not in markets]
-            invalid_set = set(invalid)
-            valid = [p for p in pairs if p not in invalid_set]
+            invalid = []
+            resolved_pairs = []
+            aliases = {}
+            seen = set()
+            for p in pairs:
+                resolved = self.loader.resolve_symbol(p)
+                if resolved in markets:
+                    if resolved not in seen:
+                        resolved_pairs.append(resolved)
+                        seen.add(resolved)
+                    if resolved != p:
+                        aliases[p] = resolved
+                else:
+                    invalid.append(p)
+            if aliases:
+                alias_msg = ", ".join(f"{k}->{v}" for k, v in aliases.items())
+                self._log(f"Pair normalized: {alias_msg}", "INFO")
             if invalid:
                 self._log(f"Invalid pairs in Config.PAIRS: {', '.join(invalid)}", "ERROR")
                 self._log("Invalid pairs will be skipped.", "WARN")
-            self._log(f"Pair validation: {len(valid)} valid, {len(invalid)} invalid.", "INFO")
-            self.pairs = valid
+            self._log(f"Pair validation: {len(resolved_pairs)} valid, {len(invalid)} invalid.", "INFO")
+            self.pairs = resolved_pairs
         except Exception as e:
             self._log(f"Pair validation failed: {e}", "WARN")
             self.pairs = pairs

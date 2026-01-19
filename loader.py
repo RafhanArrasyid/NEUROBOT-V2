@@ -132,6 +132,7 @@ class ExchangeLoader:
         self._base_dir = os.path.dirname(os.path.abspath(__file__))
         self.paper_state_file = os.path.join(self._base_dir, "paper_wallet.json")
         self._markets_loaded = False
+        self._symbol_cache: dict[str, str] = {}
         self._alert_handler = alert_handler
         self._logger = logging.getLogger("neurobot.loader")
         self._init_exchange()
@@ -275,10 +276,46 @@ class ExchangeLoader:
             return value * 30 * 24 * 60 * 60
         return None
 
+    def _alt_symbol(self, symbol: str) -> Optional[str]:
+        sym = (symbol or "").strip()
+        if not sym or ":" in sym:
+            return None
+        if "/" not in sym:
+            return None
+        base, quote = sym.split("/", 1)
+        if not base or not quote:
+            return None
+        return f"{base}/{quote}:{quote}"
+
+    def resolve_symbol(self, symbol: str) -> str:
+        sym = (symbol or "").strip()
+        if not sym:
+            return symbol
+        cached = self._symbol_cache.get(sym)
+        if cached:
+            return cached
+        markets = getattr(self.exchange, "markets", None) if self.exchange else None
+        if not markets:
+            return sym
+        if sym in markets:
+            self._symbol_cache[sym] = sym
+            return sym
+        alt = self._alt_symbol(sym)
+        if alt and alt in markets:
+            self._symbol_cache[sym] = alt
+            return alt
+        if ":" in sym:
+            base = sym.split(":", 1)[0]
+            if base in markets:
+                self._symbol_cache[sym] = base
+                return base
+        return sym
+
     async def fetch_candles(self, symbol: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
         try:
             await self.ensure_markets()
-            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            sym = self.resolve_symbol(symbol)
+            ohlcv = await self.exchange.fetch_ohlcv(sym, timeframe, limit=limit)
             if not ohlcv:
                 return pd.DataFrame()
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -301,7 +338,9 @@ class ExchangeLoader:
 
     async def get_current_price(self, symbol: str) -> Optional[float]:
         try:
-            ticker = await self.exchange.fetch_ticker(symbol)
+            await self.ensure_markets()
+            sym = self.resolve_symbol(symbol)
+            ticker = await self.exchange.fetch_ticker(sym)
             last = ticker.get('last') if isinstance(ticker, dict) else None
             if last is None:
                 last = (ticker.get('close') if isinstance(ticker, dict) else None)
@@ -321,25 +360,29 @@ class ExchangeLoader:
     async def fetch_open_orders(self, symbol: Optional[str] = None):
         try:
             await self.ensure_markets()
-            return await self.exchange.fetch_open_orders(symbol)
+            sym = self.resolve_symbol(symbol) if symbol else None
+            return await self.exchange.fetch_open_orders(sym)
         except Exception:
             return None
 
     def amount_to_precision(self, symbol: str, amount: float) -> float:
         try:
-            return float(self.exchange.amount_to_precision(symbol, amount))
+            sym = self.resolve_symbol(symbol)
+            return float(self.exchange.amount_to_precision(sym, amount))
         except Exception:
             return float(amount)
 
     def price_to_precision(self, symbol: str, price: float) -> float:
         try:
-            return float(self.exchange.price_to_precision(symbol, price))
+            sym = self.resolve_symbol(symbol)
+            return float(self.exchange.price_to_precision(sym, price))
         except Exception:
             return float(price)
 
     def get_market_limits(self, symbol: str) -> dict[str, Any]:
         try:
-            m = (self.exchange.markets or {}).get(symbol, {})
+            sym = self.resolve_symbol(symbol)
+            m = (self.exchange.markets or {}).get(sym, {})
             return {
                 'amount_min': (m.get('limits', {}).get('amount', {}) or {}).get('min'),
                 'cost_min': (m.get('limits', {}).get('cost', {}) or {}).get('min'),

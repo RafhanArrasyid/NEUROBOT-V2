@@ -36,8 +36,8 @@ class RiskManager:
             if c > Config.MAX_CORRELATION_BTC and _corr_side(k) == side_key
         )
         
-        # Batasan: Maksimal 2 posisi yang "mengekor" BTC secara ketat
-        if corr > Config.MAX_CORRELATION_BTC and high_corr_count >= 2:
+        # Batasan: Maksimal 3 posisi yang "mengekor" BTC secara ketat
+        if corr > Config.MAX_CORRELATION_BTC and high_corr_count >= 3:
             print(f"[RISK] Reject {symbol}: Too much BTC exposure (Corr: {corr:.2f}).")
             return False
 
