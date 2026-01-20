@@ -329,20 +329,46 @@ class SMCAnalyzer:
         min_sl_pct = max(0.0, self._cfg_float('SMC_MIN_SL_PCT', 0.002))
         max_sl_pct = max(min_sl_pct, self._cfg_float('SMC_MAX_SL_PCT', 0.05))
         rr_min = max(0.1, self._cfg_float('MIN_RR_RATIO', getattr(Config, 'MIN_RR_RATIO', 2.0)))
+        # Compute volatility (ATR) based stop distance.  This uses a simple ATR proxy based on the average of
+        # (high - low) over the last N candles.  It enforces a minimum stop distance equal to ATR * multiplier.
+        atr_window = max(1, int(self._cfg_int('SMC_ATR_WINDOW', 14)))
+        try:
+            if len(df) >= atr_window:
+                # average true range proxy: average of high‑low over the window
+                atr = (df['high'].iloc[-atr_window:] - df['low'].iloc[-atr_window:]).mean()
+            else:
+                atr = (df['high'] - df['low']).mean()
+        except Exception:
+            atr = 0.0
+        atr_val = float(atr) if atr is not None else 0.0
+        mult = float(self._cfg_float('SMC_ATR_MULT', 1.0))
+        vol_dist = atr_val * mult
 
         entry_f = float(entry)
         if entry_f <= 0:
             return None
 
         if direction == "LONG":
-            sl_anchor = min(float(sweep['sweep_price']), float(sweep['level']), float(ob['bottom']))
-            sl = sl_anchor * (1.0 - buffer_pct)
-            if sl <= 0:
+            # Determine stop using both structure and volatility.  Anchor stop is below the sweep/OB levels.
+            sl_anchor_price = min(float(sweep['sweep_price']), float(sweep['level']), float(ob['bottom']))
+            anchor_sl = sl_anchor_price * (1.0 - buffer_pct)
+            # Volatility‑based stop is at least ATR away from entry.
+            vol_sl = entry_f - vol_dist
+            # Choose the lower price (further from entry) to honour both structure and volatility.
+            sl = min(anchor_sl, vol_sl)
+            # ensure stop positive and not NaN
+            if sl <= 0 or np.isnan(sl):
                 return None
             dist_pct = (entry_f - sl) / entry_f
-            if dist_pct < min_sl_pct or dist_pct > max_sl_pct:
+            # Enforce min/max stop distance relative to entry
+            if dist_pct < min_sl_pct:
+                # If volatility‑based stop is too tight, expand using min_sl_pct
+                sl = entry_f * (1.0 - min_sl_pct)
+                dist_pct = (entry_f - sl) / entry_f
+            if dist_pct > max_sl_pct:
                 return None
             r = entry_f - sl
+            # Determine take‑profit: use last swing high if available and meets RR; otherwise compute based on rr_min
             last_sh = df['sh_price'].iloc[-2] if len(df) >= 2 else np.nan
             tp_candidate = float(last_sh) if pd.notna(last_sh) else None
             if tp_candidate is None or tp_candidate <= entry_f:
@@ -353,10 +379,17 @@ class SMCAnalyzer:
                 tp = tp_candidate
             return float(sl), float(tp), float(r)
 
-        sl_anchor = max(float(sweep['sweep_price']), float(sweep['level']), float(ob['top']))
-        sl = sl_anchor * (1.0 + buffer_pct)
+        # SHORT side: structure‑based and volatility‑based stops above the entry
+        sl_anchor_price = max(float(sweep['sweep_price']), float(sweep['level']), float(ob['top']))
+        anchor_sl = sl_anchor_price * (1.0 + buffer_pct)
+        vol_sl = entry_f + vol_dist
+        sl = max(anchor_sl, vol_sl)
         dist_pct = (sl - entry_f) / entry_f
-        if dist_pct < min_sl_pct or dist_pct > max_sl_pct:
+        if dist_pct < min_sl_pct:
+            # Expand to minimum stop distance
+            sl = entry_f * (1.0 + min_sl_pct)
+            dist_pct = (sl - entry_f) / entry_f
+        if dist_pct > max_sl_pct:
             return None
         r = sl - entry_f
         last_sl = df['sl_price'].iloc[-2] if len(df) >= 2 else np.nan
