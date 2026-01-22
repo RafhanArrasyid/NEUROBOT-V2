@@ -1,3 +1,5 @@
+from typing import Callable, Optional
+
 import pandas as pd
 from config import Config
 
@@ -7,8 +9,25 @@ class RiskManager:
     Menghitung Position Sizing berdasarkan Risk % dan menjaga eksposur korelasi.
     """
 
-    def __init__(self, loader):
+    def __init__(self, loader, alert_handler: Optional[Callable[..., None]] = None):
         self.loader = loader
+        self._alert_handler = alert_handler
+
+    def set_alert_handler(self, handler: Optional[Callable[..., None]]):
+        self._alert_handler = handler
+
+    def _alert_skip(self, message: str, *, key: Optional[str] = None):
+        if self._alert_handler:
+            try:
+                self._alert_handler(message, level="INFO", key=key)
+                return
+            except TypeError:
+                try:
+                    self._alert_handler(message, "INFO")
+                    return
+                except Exception:
+                    pass
+        print(f"[RISK] {message}")
 
     async def check_rules(self, symbol, side, open_positions_count, active_pairs_correlation, df_btc, df_symbol):
         """
@@ -16,7 +35,10 @@ class RiskManager:
         """
         # 1. Cek Slot Maksimal
         if open_positions_count >= Config.MAX_OPEN_POSITIONS:
-            print(f"[RISK] Reject {symbol}: Max positions reached ({Config.MAX_OPEN_POSITIONS}).")
+            self._alert_skip(
+                f"Risk guard skip {symbol}: Max positions reached ({Config.MAX_OPEN_POSITIONS}).",
+                key=f"max_pos:{symbol}",
+            )
             return False
 
         # 2. Cek Korelasi BTC (Correlation Guard)
@@ -38,7 +60,10 @@ class RiskManager:
         
         # Batasan: Maksimal 3 posisi yang "mengekor" BTC secara ketat
         if corr > Config.MAX_CORRELATION_BTC and high_corr_count >= 3:
-            print(f"[RISK] Reject {symbol}: Too much BTC exposure (Corr: {corr:.2f}).")
+            self._alert_skip(
+                f"Risk guard skip {symbol}: BTC corr {corr:.2f} > {Config.MAX_CORRELATION_BTC:.2f} (active={high_corr_count}).",
+                key=f"corr:{symbol}:{side_key}",
+            )
             return False
 
         return True

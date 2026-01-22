@@ -35,7 +35,7 @@ class AlertManager:
         if not self.enabled:
             return
         lvl = (level or "INFO").upper()
-        if lvl not in self.levels:
+        if (not force) and (lvl not in self.levels):
             return
         if self._queue is None:
             return

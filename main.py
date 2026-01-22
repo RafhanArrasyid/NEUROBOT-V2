@@ -43,8 +43,13 @@ class NeuroBot:
         self.loader.set_alert_handler(self._log)
         self.smc = SMCAnalyzer()
         self.brain = NeuroBrain()
-        self.manager = RiskManager(self.loader)
-        self.executor = ExecutionHandler(self.loader, on_pending_entry=self._set_pending_entry, on_pending_clear=self._clear_pending_entry)
+        self.manager = RiskManager(self.loader, alert_handler=self._risk_alert)
+        self.executor = ExecutionHandler(
+            self.loader,
+            on_pending_entry=self._set_pending_entry,
+            on_pending_clear=self._clear_pending_entry,
+            alert_handler=self._log,
+        )
 
         self.active_positions_display: List[dict] = []
         self.positions_by_symbol: Dict[str, dict] = {}
@@ -76,6 +81,12 @@ class NeuroBot:
         self._close_all_requested = False
         self._close_all_inflight = False
         self._stdin_thread = None
+        self._risk_alert_last: Dict[str, float] = {}
+        self._risk_alert_cooldown = max(60.0, float(getattr(Config, 'ALERT_MIN_INTERVAL_SEC', 60)))
+        self._empty_candle_counts: Dict[str, int] = {}
+        self._empty_candle_last_warn: Dict[str, float] = {}
+        self._btc_empty_count = 0
+        self._btc_empty_warn_ts = 0.0
 
     def _start_stdin_listener(self) -> bool:
         try:
@@ -119,6 +130,27 @@ class NeuroBot:
                     self.alerts.notify(level, msg)
         except Exception:
             pass
+
+    def _risk_alert(self, msg: str, level: str = "INFO", key: Optional[str] = None):
+        now = time.time()
+        alert_key = key or msg
+        last = self._risk_alert_last.get(alert_key, 0.0)
+        if now - last < self._risk_alert_cooldown:
+            return
+        self._risk_alert_last[alert_key] = now
+        self._log(msg, level, force_alert=True)
+
+    def _track_empty_candles(self, symbol: str):
+        count = int(self._empty_candle_counts.get(symbol, 0)) + 1
+        self._empty_candle_counts[symbol] = count
+        if count < 3:
+            return
+        now = time.time()
+        last_warn = float(self._empty_candle_last_warn.get(symbol, 0.0))
+        if now - last_warn < 300:
+            return
+        self._empty_candle_last_warn[symbol] = now
+        self._log(f"Candles empty for {symbol} ({count} consecutive).", "WARN")
 
     def _normalize_side(self, side: str) -> str:
         s = (side or '').lower()
@@ -590,33 +622,53 @@ class NeuroBot:
         if not self.pairs:
             self._log("No valid pairs to trade.", "ERROR")
             return False
+        markets_ok = False
+        markets_count = 0
         try:
             await self.loader.ensure_markets()
             markets = getattr(self.loader.exchange, 'markets', None) if self.loader.exchange else None
             if markets:
-                self._log(f"Markets loaded: {len(markets)} symbols.", "INFO")
+                markets_count = len(markets)
+                markets_ok = True
+                self._log(f"Markets loaded: {markets_count} symbols.", "INFO")
             else:
                 self._log("Markets not available; continuing.", "WARN")
         except Exception as e:
             self._log(f"Preflight markets check failed: {e}", "WARN")
         if Config.TRADING_MODE == "LIVE":
+            bal_ok = False
+            pos_ok = False
+            orders_ok = False
+            bal_val = 0.0
             try:
                 bal = await self.loader.get_balance()
-                self._log(f"Preflight balance: {float(bal):.2f}", "INFO")
+                bal_val = float(bal)
+                bal_ok = True
+                self._log(f"Preflight balance: {bal_val:.2f}", "INFO")
             except Exception:
                 self._log("Preflight balance check failed.", "WARN")
             try:
                 pos = await self.loader.fetch_positions()
                 if pos is None:
                     self._log("Preflight fetch_positions failed.", "WARN")
+                else:
+                    pos_ok = True
             except Exception:
                 self._log("Preflight fetch_positions failed.", "WARN")
             try:
                 orders = await self.loader.fetch_open_orders(symbol=None)
                 if orders is None:
                     self._log("Preflight fetch_open_orders failed.", "WARN")
+                else:
+                    orders_ok = True
             except Exception:
                 self._log("Preflight fetch_open_orders failed.", "WARN")
+            if markets_ok and bal_ok and pos_ok and orders_ok:
+                self._log(
+                    f"Preflight OK: markets={markets_count} balance={bal_val:.2f} positions=OK open_orders=OK",
+                    "INFO",
+                    force_alert=True,
+                )
             await self._validate_account_mode_and_leverage()
         return True
 
@@ -720,7 +772,18 @@ class NeuroBot:
         self._last_btc_update = now
         try:
             self.btc_df = await self.loader.fetch_candles(Config.BTC_SYMBOL, Config.TF_ENTRY, limit=300)
-        except Exception: pass
+        except Exception:
+            self.btc_df = pd.DataFrame()
+
+        if self.btc_df is None or self.btc_df.empty:
+            self._btc_empty_count += 1
+            if self._btc_empty_count >= 3:
+                now_ts = time.time()
+                if now_ts - self._btc_empty_warn_ts >= 300:
+                    self._btc_empty_warn_ts = now_ts
+                    self._log("BTC candle data empty; correlation guard disabled.", "WARN")
+        else:
+            self._btc_empty_count = 0
 
     async def _update_active_pairs_correlation(self):
         now = time.time()
@@ -1069,7 +1132,10 @@ class NeuroBot:
                 # Scan limit
                 scan_limit = min(350, int(Config.TRAINING_LOOKBACK_CANDLES))
                 df = await self.loader.fetch_candles(symbol, Config.TF_ENTRY, limit=scan_limit)
-                if df is None or df.empty: return
+                if df is None or df.empty:
+                    self._track_empty_candles(symbol)
+                    return
+                self._empty_candle_counts.pop(symbol, None)
 
                 last_ts = df['timestamp'].iloc[-1]
                 prev_ts = self.last_processed_ts.get(symbol)
@@ -1089,7 +1155,7 @@ class NeuroBot:
                         self._log(f"SMC HTF Filter Rejected {symbol} {signal}", "INFO")
                         return
 
-                self._log(f"SMC Signal {symbol}: {signal}", "INFO")
+                self._log(f"SMC Signal {symbol}: {signal}", "INFO", force_alert=True)
 
                 ai_prob = None
                 ai_p_value = None
@@ -1143,7 +1209,11 @@ class NeuroBot:
                 max_risk = float(balance) * float(getattr(Config, 'MAX_TOTAL_RISK', 0.07))
                 remaining_risk = max_risk - total_risk
                 if remaining_risk <= 0:
-                    self._log(f"Risk cap reached {symbol}: {total_risk:.2f}/{max_risk:.2f}", "INFO")
+                    self._risk_alert(
+                        f"Risk guard skip {symbol}: Risk cap reached {total_risk:.2f}/{max_risk:.2f}.",
+                        level="INFO",
+                        key=f"risk_cap:{symbol}",
+                    )
                     return
 
                 opp_side = 'sell' if side == 'buy' else 'buy'
@@ -1553,12 +1623,12 @@ class NeuroBot:
     async def run(self):
         if not self._acquire_instance_lock():
             return
+        self.alerts.start()
         await self._validate_pairs()
         ok = await self._preflight_checks()
         if not ok:
             self._release_instance_lock()
             return
-        self.alerts.start()
         stdin_ok = self._start_stdin_listener()
         if stdin_ok:
             self._log("Console command ready: type 'close' + Enter to close all positions/orders.", "INFO")

@@ -37,7 +37,7 @@ class Config:
     MAX_OPEN_POSITIONS = 4
     MAX_TOTAL_RISK = 0.07
     HEDGE_SECOND_LEG_REDUCTION = 0.30
-    MIN_RR_RATIO = 2.0          
+    MIN_RR_RATIO = 1.8          
     
     # Trigger break‑even when trade has moved 1R in favour.  Lower value locks profit earlier.
     BREAK_EVEN_TRIGGER_R = 1.0
@@ -78,33 +78,33 @@ class Config:
     SMC_HTF_PIVOT_LEN = 7
     SMC_USE_VOLUME_FILTER = True
     SMC_VOLUME_WINDOW = 20
-    SMC_VOLUME_MIN_MULT = 1.0
+    SMC_VOLUME_MIN_MULT = 0.8
     SMC_ALLOWED_UTC_HOURS = []
     # --- ICT/SMC "MURNI" FLOW CONTROLS ---
     # Increase pivot length to use longer swing structures and reduce noise on entry time frame.
     SMC_PIVOT_LEN = 5
     # Look farther back for liquidity sweeps to ensure meaningful stops are hunted before entry.
     SMC_SWEEP_LOOKBACK = 20
-    SMC_SWEEP_REQUIRE_CLOSE_BACK = True
+    SMC_SWEEP_REQUIRE_CLOSE_BACK = False
     SMC_MSS_LOOKAHEAD = 12
     SMC_REQUIRE_DISPLACEMENT = True
-    # Require bigger body displacement to confirm intent.  Use longer window and higher multiplier.
-    SMC_DISPLACEMENT_WINDOW = 25
-    SMC_DISPLACEMENT_MULT = 2.0
+    # Require body displacement to confirm intent. Use a moderate window and multiplier.
+    SMC_DISPLACEMENT_WINDOW = 20
+    SMC_DISPLACEMENT_MULT = 1.4
     # Expand fair value gap lookback to catch relevant imbalances.
     SMC_FVG_LOOKBACK = 20
-    SMC_FVG_AFTER_MSS = True
-    SMC_REQUIRE_UNMITIGATED_FVG = True
+    SMC_FVG_AFTER_MSS = False
+    SMC_REQUIRE_UNMITIGATED_FVG = False
     SMC_ALLOW_IFVG = True
-    SMC_OB_LOOKBACK = 8
+    SMC_OB_LOOKBACK = 12
     SMC_OB_USE_BODY = True
     SMC_USE_OB_FVG_OVERLAP = True
-    # Require candle close inside the entry zone to avoid early entries on mere touches.
-    SMC_ENTRY_REQUIRE_CLOSE_IN_ZONE = True
+    # Allow wick touches inside the entry zone for earlier entries.
+    SMC_ENTRY_REQUIRE_CLOSE_IN_ZONE = False
     # Place stop‑loss beyond structure using larger buffer and minimum distance.  Max distance widened to allow volatile markets.
     SMC_SL_BUFFER_PCT = 0.003
     SMC_MIN_SL_PCT = 0.005
-    SMC_MAX_SL_PCT = 0.07
+    SMC_MAX_SL_PCT = 0.10
     # Default killzones (UTC) - kosongkan jika ingin off.
     SMC_ALLOWED_UTC_WINDOWS = []
 
@@ -112,7 +112,7 @@ class Config:
     # Number of candles used to compute Average True Range (ATR) for volatility‑based stops.
     SMC_ATR_WINDOW = 14
     # Multiplier applied to ATR when deriving minimum stop distance.  A value of 1.0 means SL will be at least one ATR away from entry.
-    SMC_ATR_MULT = 1.0
+    SMC_ATR_MULT = 0.8
     # ==========================================
     # 5. SAFETY & OPS
     # ==========================================
@@ -148,4 +148,3 @@ class Config:
     SMTP_PASS = os.getenv("SMTP_PASS", "")
     SMTP_TO = os.getenv("SMTP_TO", "")
     SMTP_FROM = os.getenv("SMTP_FROM", "")
-

@@ -18,14 +18,34 @@ class ExecutionHandler:
     - Semua operasi dibungkus try/except agar loop utama tidak crash.
     """
 
-    def __init__(self, loader, on_pending_entry: Callable | None = None, on_pending_clear: Callable | None = None):
+    def __init__(
+        self,
+        loader,
+        on_pending_entry: Callable | None = None,
+        on_pending_clear: Callable | None = None,
+        alert_handler: Callable | None = None,
+    ):
         self.loader = loader
         self.logger = logging.getLogger("neurobot.execution")
         self._orders_by_symbol: dict[str, set[str]] = {}
         self._on_pending_entry = on_pending_entry
         self._on_pending_clear = on_pending_clear
+        self._alert_handler = alert_handler
+
+    def set_alert_handler(self, handler: Callable | None):
+        self._alert_handler = handler
 
     def _log(self, msg: str, level: str = "INFO"):
+        if self._alert_handler and level in ("WARN", "ERROR"):
+            try:
+                self._alert_handler(msg, level)
+            except TypeError:
+                try:
+                    self._alert_handler(msg, level, force_alert=True)
+                except Exception:
+                    pass
+            except Exception:
+                pass
         try:
             if level == "ERROR":
                 self.logger.error(msg)
@@ -148,6 +168,12 @@ class ExecutionHandler:
                 cancel_ok = await self._cancel_order_with_retries(symbol, entry_id, attempts=3, delay_sec=0.5)
                 if not cancel_ok:
                     await self._cancel_tracked_orders(symbol)
+                    self._log(f"Entry cancel failed {symbol} {side} id={entry_id}", "WARN")
+                else:
+                    self._log(
+                        f"Entry not filled; canceled {symbol} {side} qty={float(qty):.6f} price={float(price):.6f}",
+                        "WARN",
+                    )
                 self._notify_pending_clear(symbol, side, entry_id)
                 return None
 
